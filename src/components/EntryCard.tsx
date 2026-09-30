@@ -13,6 +13,13 @@ const AVATAR_COLORS = [
   "bg-violet-100 text-violet-700",
 ];
 
+/** 같은 이름은 항상 같은 색이 되도록 이름으로 색을 고른다. */
+function avatarColor(name: string): string {
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.codePointAt(0)!) >>> 0;
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+}
+
 type Props = {
   id: number;
   authorName: string;
@@ -32,8 +39,7 @@ export function EntryCard(entry: Props) {
       <div
         aria-hidden
         className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base font-bold ${
-          AVATAR_COLORS[entry.id % AVATAR_COLORS.length]
-        }`}
+avatarColor(entry.authorName)}`}
       >
         {[...entry.authorName][0]}
       </div>
