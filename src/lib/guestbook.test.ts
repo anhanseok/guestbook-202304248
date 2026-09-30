@@ -38,6 +38,20 @@ describe("작성과 조회", () => {
   });
 });
 
+describe("입력 정규화", () => {
+  it("CRLF 줄바꿈은 한 글자로 세어, 화면 글자 수 500자 글이 거부되지 않는다", async () => {
+    const message = "a".repeat(493) + "\r\n".repeat(6);
+    const r = await createEntry(db, { authorName: "A", message: message + "b", password: "1234" }, t0);
+    expect(r.ok).toBe(true);
+    expect((await listEntries(db))[0].message).not.toContain("\r");
+  });
+
+  it("숫자가 아닌 id는 오류 없이 not_found", async () => {
+    expect(await deleteEntry(db, { id: Number("abc"), password: "1234" }, t0)).toMatchObject({ reason: "not_found" });
+    expect(await editEntry(db, { id: 1.5, message: "x", password: "1234" }, t0)).toMatchObject({ reason: "not_found" });
+  });
+});
+
 describe("수정", () => {
   it("올바른 비밀번호면 메시지만 바뀌고 수정 시각이 붙으며 순서는 그대로다", async () => {
     const old = await write("첫째", "원래", "1234", at(0));
@@ -121,6 +135,19 @@ describe("잠금", () => {
     const id = await write();
     await wrongEdit(id);
     expect(await deleteEntry(db, { id, password: "0000" }, t0)).toMatchObject({ remainingAttempts: MAX_ATTEMPTS - 2 });
+  });
+
+  it("동시에 보낸 추측 중 정답이 섞여 있어도, 그새 잠겼으면 쓰기를 막는다", async () => {
+    const id = await write();
+    for (let i = 0; i < MAX_ATTEMPTS - 1; i++) await wrongEdit(id);
+    // 정답 요청이 비밀번호 비교를 통과한 직후, 다른 오답 요청이 10회째를 채워 잠근 상황
+    const racing = await Promise.all([
+      wrongEdit(id),
+      deleteEntry(db, { id, password: "1234" }, t0),
+    ]);
+    const deletedWhileLocked = racing[0].ok === false && racing[0].reason === "locked" && racing[1].ok;
+    const list = await listEntries(db);
+    expect(deletedWhileLocked && list.length === 0).toBe(false);
   });
 
   it("한 글이 잠겨도 다른 글은 영향이 없다", async () => {

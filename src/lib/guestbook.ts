@@ -41,6 +41,9 @@ function checkLength(field: keyof typeof LIMITS, value: string, errors: FieldErr
 
 const hasErrors = (e: FieldErrors) => Object.keys(e).length > 0;
 
+/** 브라우저가 textarea 줄바꿈을 CRLF로 보내므로, 화면의 글자 수와 맞게 LF로 통일한다. */
+const normalizeMessage = (m: string) => m.replace(/\r\n?/g, "\n").trim();
+
 export async function listEntries(db: Db): Promise<EntryView[]> {
   return db
     .select({
@@ -60,7 +63,7 @@ export async function createEntry(
   now: Date,
 ): Promise<CreateResult> {
   const authorName = input.authorName.trim();
-  const message = input.message.trim();
+  const message = normalizeMessage(input.message);
   const password = input.password.trim();
   const errors: FieldErrors = {};
   checkLength("authorName", authorName, errors);
@@ -75,6 +78,17 @@ export async function createEntry(
   return { ok: true, id: row.id };
 }
 
+/** 이 글이 잠겨 있지 않을 때만 걸리는 조건. 비밀번호 비교 사이에 잠겼으면 쓰기를 막는다. */
+const notLocked = (id: number, now: Date) =>
+  and(eq(entries.id, id), or(isNull(entries.lockedUntil), lte(entries.lockedUntil, now)));
+
+/** 쓰기가 한 행도 바꾸지 못한 이유: 그새 삭제됐거나, 그새 잠겼다. */
+async function whyNothingChanged(db: Db, id: number, now: Date): Promise<ModifyResult> {
+  const [row] = await db.select({ lockedUntil: entries.lockedUntil }).from(entries).where(eq(entries.id, id));
+  if (!row) return { ok: false, reason: "not_found" };
+  return { ok: false, reason: "locked", retryAfterMinutes: row.lockedUntil ? minutesUntil(row.lockedUntil, now) : LOCK_MINUTES };
+}
+
 const minutesUntil = (until: Date, now: Date) => Math.max(1, Math.ceil((until.getTime() - now.getTime()) / 60_000));
 
 /**
@@ -82,6 +96,7 @@ const minutesUntil = (until: Date, now: Date) => Math.max(1, Math.ceil((until.ge
  * 틀리면 그 글의 연속 실패 횟수를 올리고, MAX_ATTEMPTS번째에 잠근다.
  */
 async function authorize(db: Db, id: number, password: string, now: Date): Promise<ModifyResult | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return { ok: false, reason: "not_found" };
   const [row] = await db
     .select({ passwordHash: entries.passwordHash, lockedUntil: entries.lockedUntil })
     .from(entries)
@@ -102,7 +117,7 @@ async function authorize(db: Db, id: number, password: string, now: Date): Promi
       failedAttempts: next,
       lockedUntil: sql`CASE WHEN (${next}) >= ${MAX_ATTEMPTS} THEN ${lockUntil.toISOString()}::timestamptz ELSE NULL END`,
     })
-    .where(and(eq(entries.id, id), or(isNull(entries.lockedUntil), lte(entries.lockedUntil, now))))
+    .where(notLocked(id, now))
     .returning({ failedAttempts: entries.failedAttempts, lockedUntil: entries.lockedUntil });
 
   if (!counted) return { ok: false, reason: "locked", retryAfterMinutes: LOCK_MINUTES };
@@ -115,7 +130,7 @@ export async function editEntry(
   input: { id: number; message: string; password: string },
   now: Date,
 ): Promise<ModifyResult> {
-  const message = input.message.trim();
+  const message = normalizeMessage(input.message);
   const errors: FieldErrors = {};
   checkLength("message", message, errors);
   if (hasErrors(errors)) return { ok: false, reason: "invalid", errors };
@@ -126,9 +141,9 @@ export async function editEntry(
   const updated = await db
     .update(entries)
     .set({ message, updatedAt: now, failedAttempts: 0, lockedUntil: null })
-    .where(eq(entries.id, input.id))
+    .where(notLocked(input.id, now))
     .returning({ id: entries.id });
-  return updated.length ? { ok: true } : { ok: false, reason: "not_found" };
+  return updated.length ? { ok: true } : whyNothingChanged(db, input.id, now);
 }
 
 export async function deleteEntry(
@@ -141,7 +156,7 @@ export async function deleteEntry(
 
   const deleted = await db
     .delete(entries)
-    .where(eq(entries.id, input.id))
+    .where(notLocked(input.id, now))
     .returning({ id: entries.id });
-  return deleted.length ? { ok: true } : { ok: false, reason: "not_found" };
+  return deleted.length ? { ok: true } : whyNothingChanged(db, input.id, now);
 }
