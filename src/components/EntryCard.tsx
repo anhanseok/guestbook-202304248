@@ -3,7 +3,15 @@
 import { useActionState, useEffect, useState } from "react";
 import { deleteEntryAction, editEntryAction, type FormState } from "@/app/actions";
 import { LIMITS } from "@/lib/guestbook-limits";
-import { FieldError, inputClass, primaryButton, secondaryButton } from "./ui";
+import { FieldError, ghostButton, inputClass, primaryButton, secondaryButton } from "./ui";
+
+const AVATAR_COLORS = [
+  "bg-rose-100 text-rose-700",
+  "bg-amber-100 text-amber-700",
+  "bg-emerald-100 text-emerald-700",
+  "bg-sky-100 text-sky-700",
+  "bg-violet-100 text-violet-700",
+];
 
 type Props = {
   id: number;
@@ -20,33 +28,45 @@ export function EntryCard(entry: Props) {
   const close = () => setMode("view");
 
   return (
-    <li className="rounded-xl bg-white p-4 shadow-sm">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-semibold">{entry.authorName}</p>
-        <p className="text-xs text-slate-400">
-          {entry.createdAt}
-          {entry.updatedAt && <span> · (수정됨 {entry.updatedAt})</span>}
-        </p>
+    <li className="flex gap-3 rounded-2xl border border-amber-100 bg-white p-4 shadow-sm shadow-amber-900/5">
+      <div
+        aria-hidden
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base font-bold ${
+          AVATAR_COLORS[entry.id % AVATAR_COLORS.length]
+        }`}
+      >
+        {[...entry.authorName][0]}
       </div>
 
-      {mode === "edit" ? (
-        <EditForm entry={entry} onDone={close} />
-      ) : (
-        <p className="mt-2 whitespace-pre-wrap break-words">{entry.message}</p>
-      )}
-
-      {mode === "delete" && <DeleteForm id={entry.id} onCancel={close} />}
-
-      {mode === "view" && (
-        <div className="mt-3 flex justify-end gap-2">
-          <button type="button" onClick={() => setMode("edit")} className={secondaryButton}>
-            수정
-          </button>
-          <button type="button" onClick={() => setMode("delete")} className={secondaryButton}>
-            삭제
-          </button>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate font-semibold text-stone-800">{entry.authorName}</p>
+            <p className="text-xs text-stone-400">
+              {entry.createdAt}
+              {entry.updatedAt && <span> · (수정됨 {entry.updatedAt})</span>}
+            </p>
+          </div>
+          {mode === "view" && (
+            <div className="flex shrink-0">
+              <button type="button" onClick={() => setMode("edit")} className={ghostButton}>
+                수정
+              </button>
+              <button type="button" onClick={() => setMode("delete")} className={ghostButton}>
+                삭제
+              </button>
+            </div>
+          )}
         </div>
-      )}
+
+        {mode === "edit" ? (
+          <EditForm entry={entry} onDone={close} />
+        ) : (
+          <p className="mt-2 whitespace-pre-wrap break-words leading-relaxed text-stone-700">{entry.message}</p>
+        )}
+
+        {mode === "delete" && <DeleteForm id={entry.id} onCancel={close} />}
+      </div>
     </li>
   );
 }

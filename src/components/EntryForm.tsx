@@ -19,7 +19,8 @@ export function EntryForm() {
   const v = state.status === "error" ? state.values : undefined;
 
   return (
-    <form action={action} className="space-y-3 rounded-xl bg-white p-4 shadow-sm">
+    <form action={action} className="space-y-3 rounded-2xl border border-amber-100 bg-white p-5 shadow-md shadow-amber-900/5">
+      <p className="font-semibold text-stone-700">📝 방명록을 남겨주세요</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <input
