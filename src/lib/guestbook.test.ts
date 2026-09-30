@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db";
-import { createEntry, deleteEntry, editEntry, listEntries } from "./guestbook";
+import { createEntry, deleteEntry, editEntry, listEntries, MAX_ATTEMPTS } from "./guestbook";
 import { createTestDb } from "./test-db";
 
 let db: Db;
@@ -85,9 +85,9 @@ describe("삭제", () => {
 describe("잠금", () => {
   const wrongEdit = (id: number, now = t0) => editEntry(db, { id, message: "x", password: "0000" }, now);
 
-  it("틀릴 때마다 남은 시도 횟수가 줄고, 5번째에 5분간 잠긴다", async () => {
+  it("틀릴 때마다 남은 시도 횟수가 줄고, 10번째에 5분간 잠긴다", async () => {
     const id = await write();
-    for (const remaining of [4, 3, 2, 1]) {
+    for (let remaining = MAX_ATTEMPTS - 1; remaining >= 1; remaining--) {
       expect(await wrongEdit(id)).toMatchObject({ reason: "wrong_password", remainingAttempts: remaining });
     }
     expect(await wrongEdit(id)).toMatchObject({ reason: "locked", retryAfterMinutes: 5 });
@@ -95,7 +95,7 @@ describe("잠금", () => {
 
   it("잠긴 동안에는 올바른 비밀번호도 거부하고, 남은 시간을 분 단위 올림으로 알려준다", async () => {
     const id = await write();
-    for (let i = 0; i < 5; i++) await wrongEdit(id);
+    for (let i = 0; i < MAX_ATTEMPTS; i++) await wrongEdit(id);
     expect(await deleteEntry(db, { id, password: "1234" }, at(2.5))).toMatchObject({
       reason: "locked",
       retryAfterMinutes: 3,
@@ -105,8 +105,8 @@ describe("잠금", () => {
 
   it("5분이 지나면 올바른 비밀번호가 통하고, 틀리면 다시 1회째부터 센다", async () => {
     const id = await write();
-    for (let i = 0; i < 5; i++) await wrongEdit(id);
-    expect(await wrongEdit(id, at(5))).toMatchObject({ reason: "wrong_password", remainingAttempts: 4 });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) await wrongEdit(id);
+    expect(await wrongEdit(id, at(5))).toMatchObject({ reason: "wrong_password", remainingAttempts: MAX_ATTEMPTS - 1 });
     expect(await editEntry(db, { id, message: "풀림", password: "1234" }, at(5))).toEqual({ ok: true });
   });
 
@@ -114,19 +114,19 @@ describe("잠금", () => {
     const id = await write();
     for (let i = 0; i < 3; i++) await wrongEdit(id);
     await editEntry(db, { id, message: "성공", password: "1234" }, t0);
-    expect(await wrongEdit(id)).toMatchObject({ remainingAttempts: 4 });
+    expect(await wrongEdit(id)).toMatchObject({ remainingAttempts: MAX_ATTEMPTS - 1 });
   });
 
   it("수정과 삭제의 실패를 합쳐서 센다", async () => {
     const id = await write();
     await wrongEdit(id);
-    expect(await deleteEntry(db, { id, password: "0000" }, t0)).toMatchObject({ remainingAttempts: 3 });
+    expect(await deleteEntry(db, { id, password: "0000" }, t0)).toMatchObject({ remainingAttempts: MAX_ATTEMPTS - 2 });
   });
 
   it("한 글이 잠겨도 다른 글은 영향이 없다", async () => {
     const locked = await write("A");
     const other = await write("B");
-    for (let i = 0; i < 5; i++) await wrongEdit(locked);
+    for (let i = 0; i < MAX_ATTEMPTS; i++) await wrongEdit(locked);
     expect(await deleteEntry(db, { id: other, password: "1234" }, t0)).toEqual({ ok: true });
   });
 });

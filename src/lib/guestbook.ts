@@ -27,7 +27,7 @@ export type ModifyResult =
   | { ok: false; reason: "locked"; retryAfterMinutes: number };
 
 /** 한 글에 연속으로 틀릴 수 있는 횟수와 잠금 시간 (ADR 0001) */
-export const MAX_ATTEMPTS = 5;
+export const MAX_ATTEMPTS = 10;
 export const LOCK_MINUTES = 5;
 
 const LABELS = { authorName: "이름", message: "메시지", password: "비밀번호" } as const;
