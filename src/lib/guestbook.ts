@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { entries } from "@/db/schema";
 import { LIMITS } from "./guestbook-limits";
@@ -23,7 +23,12 @@ export type ModifyResult =
   | { ok: true }
   | { ok: false; reason: "invalid"; errors: FieldErrors }
   | { ok: false; reason: "not_found" }
-  | { ok: false; reason: "wrong_password" };
+  | { ok: false; reason: "wrong_password"; remainingAttempts: number }
+  | { ok: false; reason: "locked"; retryAfterMinutes: number };
+
+/** 한 글에 연속으로 틀릴 수 있는 횟수와 잠금 시간 (ADR 0001) */
+export const MAX_ATTEMPTS = 5;
+export const LOCK_MINUTES = 5;
 
 const LABELS = { authorName: "이름", message: "메시지", password: "비밀번호" } as const;
 
@@ -70,15 +75,39 @@ export async function createEntry(
   return { ok: true, id: row.id };
 }
 
-/** 비밀번호를 확인한다. 통과하면 null, 아니면 거부 결과를 돌려준다. */
-async function authorize(db: Db, id: number, password: string): Promise<ModifyResult | null> {
+const minutesUntil = (until: Date, now: Date) => Math.max(1, Math.ceil((until.getTime() - now.getTime()) / 60_000));
+
+/**
+ * 비밀번호를 확인한다. 통과하면 null, 아니면 거부 결과를 돌려준다.
+ * 틀리면 그 글의 연속 실패 횟수를 올리고, MAX_ATTEMPTS번째에 잠근다.
+ */
+async function authorize(db: Db, id: number, password: string, now: Date): Promise<ModifyResult | null> {
   const [row] = await db
-    .select({ passwordHash: entries.passwordHash })
+    .select({ passwordHash: entries.passwordHash, lockedUntil: entries.lockedUntil })
     .from(entries)
     .where(eq(entries.id, id));
   if (!row) return { ok: false, reason: "not_found" };
-  if (!(await bcrypt.compare(password.trim(), row.passwordHash))) return { ok: false, reason: "wrong_password" };
-  return null;
+  if (row.lockedUntil && row.lockedUntil > now) {
+    return { ok: false, reason: "locked", retryAfterMinutes: minutesUntil(row.lockedUntil, now) };
+  }
+  if (await bcrypt.compare(password.trim(), row.passwordHash)) return null;
+
+  // 한 번의 UPDATE로 올려서 동시 요청에도 횟수가 어긋나지 않게 한다.
+  // 잠금이 풀린 뒤의 첫 실패는 1회째부터 다시 센다.
+  const next = sql<number>`CASE WHEN ${entries.lockedUntil} IS NOT NULL THEN 1 ELSE ${entries.failedAttempts} + 1 END`;
+  const lockUntil = new Date(now.getTime() + LOCK_MINUTES * 60_000);
+  const [counted] = await db
+    .update(entries)
+    .set({
+      failedAttempts: next,
+      lockedUntil: sql`CASE WHEN (${next}) >= ${MAX_ATTEMPTS} THEN ${lockUntil.toISOString()}::timestamptz ELSE NULL END`,
+    })
+    .where(and(eq(entries.id, id), or(isNull(entries.lockedUntil), lte(entries.lockedUntil, now))))
+    .returning({ failedAttempts: entries.failedAttempts, lockedUntil: entries.lockedUntil });
+
+  if (!counted) return { ok: false, reason: "locked", retryAfterMinutes: LOCK_MINUTES };
+  if (counted.lockedUntil) return { ok: false, reason: "locked", retryAfterMinutes: minutesUntil(counted.lockedUntil, now) };
+  return { ok: false, reason: "wrong_password", remainingAttempts: MAX_ATTEMPTS - counted.failedAttempts };
 }
 
 export async function editEntry(
@@ -91,12 +120,12 @@ export async function editEntry(
   checkLength("message", message, errors);
   if (hasErrors(errors)) return { ok: false, reason: "invalid", errors };
 
-  const denied = await authorize(db, input.id, input.password);
+  const denied = await authorize(db, input.id, input.password, now);
   if (denied) return denied;
 
   const updated = await db
     .update(entries)
-    .set({ message, updatedAt: now })
+    .set({ message, updatedAt: now, failedAttempts: 0, lockedUntil: null })
     .where(eq(entries.id, input.id))
     .returning({ id: entries.id });
   return updated.length ? { ok: true } : { ok: false, reason: "not_found" };
@@ -105,8 +134,9 @@ export async function editEntry(
 export async function deleteEntry(
   db: Db,
   input: { id: number; password: string },
+  now: Date,
 ): Promise<ModifyResult> {
-  const denied = await authorize(db, input.id, input.password);
+  const denied = await authorize(db, input.id, input.password, now);
   if (denied) return denied;
 
   const deleted = await db

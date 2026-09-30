@@ -2,7 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/db";
-import { createEntry, deleteEntry, editEntry, type FieldErrors, type ModifyResult } from "@/lib/guestbook";
+import {
+  createEntry,
+  deleteEntry,
+  editEntry,
+  MAX_ATTEMPTS,
+  type FieldErrors,
+  type ModifyResult,
+} from "@/lib/guestbook";
 
 export type FormState = {
   status: "idle" | "success" | "error";
@@ -16,7 +23,9 @@ const str = (f: FormData, k: string) => String(f.get(k) ?? "");
 function denialMessage(r: Exclude<ModifyResult, { ok: true }>): string | undefined {
   switch (r.reason) {
     case "wrong_password":
-      return "비밀번호가 일치하지 않습니다.";
+      return `비밀번호가 일치하지 않습니다. (남은 시도 ${r.remainingAttempts}회)`;
+    case "locked":
+      return `비밀번호를 ${MAX_ATTEMPTS}회 틀려 잠겼습니다. ${r.retryAfterMinutes}분 후 다시 시도하세요.`;
     case "not_found":
       return "글을 찾을 수 없습니다.";
     case "invalid":
@@ -56,6 +65,6 @@ export async function editEntryAction(_: FormState, form: FormData): Promise<For
 }
 
 export async function deleteEntryAction(_: FormState, form: FormData): Promise<FormState> {
-  const r = await deleteEntry(getDb(), { id: Number(form.get("id")), password: str(form, "password") });
+  const r = await deleteEntry(getDb(), { id: Number(form.get("id")), password: str(form, "password") }, new Date());
   return toState(r, {});
 }
